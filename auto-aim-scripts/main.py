@@ -1,8 +1,8 @@
 import os
 import sys
 import argparse
-import glob
 import time
+import math
 
 import cv2
 import numpy as np
@@ -46,6 +46,8 @@ model = YOLO(model_path, task='detect')
 labels = model.names
 
 camera = Camera(img_source, user_res, record)
+cam_centre_x = camera.resW // 2
+cam_centre_y = camera.resH // 2
 
 # Set bounding box colors (using the Tableu 10 color scheme)
 bbox_colors = [(164,120,87), (68,148,228), (93,97,209), (178,182,133), (88,159,106), 
@@ -82,6 +84,8 @@ while True:
     # Run inference on frame
     results = model(frame, verbose=False)
 
+    cv2.circle(frame, (cam_centre_x, cam_centre_y), 3, (0, 0, 255), -1)
+
     # Extract results
     detections = results[0].boxes
 
@@ -105,10 +109,14 @@ while True:
         conf = detections[i].conf.item()
 
         # Draw box if confidence threshold is high enough
-        if conf > 0.5:
+        if conf > 0.8:
 
             color = bbox_colors[classidx % 10]
             cv2.rectangle(frame, (xmin,ymin), (xmax,ymax), color, 2)
+
+            cx = (xmin + xmax) // 2
+            cy = (ymin + ymax) // 2
+            cv2.circle(frame, (cx, cy), 3, (0, 0, 255), -1)
 
             label = f'{classname}: {int(conf*100)}%'
             labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1) # Get font size
@@ -116,14 +124,11 @@ while True:
             cv2.rectangle(frame, (xmin, label_ymin-labelSize[1]-10), (xmin+labelSize[0], label_ymin+baseLine-10), color, cv2.FILLED) # Draw white box to put label text in
             cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1) # Draw label text
 
-            # Basic example: count the number of objects in the image
-            object_count = object_count + 1
-
-    # Calculate and draw framerate (if using video, USB, or Picamera source)
-    cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
+            distance_from_centre = math.dist((cx, cy), (cam_centre_x, cam_centre_y))
+            cv2.putText(frame, f'Distance from centre:{distance_from_centre}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2)
+            
+    # cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
     
-    # Display detection results
-    cv2.putText(frame, f'Number of objects: {object_count}', (10,40), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw total number of detected objects
     cv2.imshow('YOLO detection results',frame) # Display image
     if record: camera.recorder.write(frame)
 
@@ -135,7 +140,7 @@ while True:
     elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
         cv2.waitKey()
     elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
-        cv2.imwrite('capture.png', frame)
+        cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)
     
     # Calculate FPS for this frame
     t_stop = time.perf_counter()
