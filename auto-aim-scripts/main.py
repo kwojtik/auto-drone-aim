@@ -61,8 +61,8 @@ while True:
         frame = cv2.resize(frame,(camera.resW, camera.resH))
 
     # Run inference on frame
-    # results = model(frame, verbose=False)
-    results = model.track(frame, persist=True, tracker='bytetrack.yaml')
+    results = model(frame, verbose=False)
+    # results = model.track(frame, persist=True, tracker='bytetrack.yaml')
 
     cv2.circle(frame, (cam_centre_x, cam_centre_y), 3, (0, 0, 255), -1)
 
