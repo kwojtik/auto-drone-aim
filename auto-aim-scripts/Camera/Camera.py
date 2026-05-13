@@ -3,6 +3,7 @@ import sys
 import cv2
 import glob
 
+
 class Camera:
     def __init__(self, source_path, resolution=False, record=False):
         self.cam_idx = 0
@@ -48,6 +49,7 @@ class Camera:
         
         elif self.source_type == 'picamera':
             from picamera2 import Picamera2
+            
             self.cap = Picamera2()
             self.cap.configure(self.cap.create_video_configuration(main={"format": 'XRGB8888', "size": (self.resW, self.resH)}))
             self.cap.start()
