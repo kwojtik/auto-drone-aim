@@ -2,6 +2,7 @@ import os
 import sys
 import cv2
 import glob
+import numpy as np
 
 
 class Camera:
@@ -58,3 +59,17 @@ class Camera:
         if self.source_type == 'picamera':
             return self.cap.capture_array()
         return self.cap.read()
+    
+    def get_frame(self):
+        if self.source_type == 'usb' or self.source_type == 'webcam': # If source is a USB camera, grab frame from camera
+            ret, frame = self.get_cap()
+            if (frame is None) or (not ret):
+                raise Exception('Unable to read frames from the camera. This indicates the camera is disconnected or not working. Exiting program.')
+
+        elif self.source_type == 'picamera': # If source is a Picamera, grab frames using picamera interface
+            frame_bgra = self.get_cap()
+            frame = cv2.cvtColor(np.copy(frame_bgra), cv2.COLOR_BGRA2BGR)
+            if (frame is None):
+                raise Exception('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
+        
+        return frame

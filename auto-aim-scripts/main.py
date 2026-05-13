@@ -1,33 +1,19 @@
 import os
 import sys
-import argparse
+# import argparse
 import time
 import math
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
+# from yolox.tracker.byte_tracker import BYTETracker
 
 from Camera.Camera import Camera
+from Common.functions import parse_args
 
-# Define and parse user input arguments
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--model', help='Path to YOLO model file (example: "runs/detect/train/weights/best.pt")',
-                    required=True)
-parser.add_argument('--source', help='Image source, can be image file ("test.jpg"), \
-                    image folder ("test_dir"), video file ("testvid.mp4"), or index of USB camera ("usb0")', 
-                    required=True)
-parser.add_argument('--thresh', help='Minimum confidence threshold for displaying detected objects (example: "0.4")',
-                    default=0.5)
-parser.add_argument('--resolution', help='Resolution in WxH to display inference results at (example: "640x480"), \
-                    otherwise, match source resolution',
-                    default=None)
-parser.add_argument('--record', help='Record results from video or webcam and save it as "demo1.avi". Must specify --resolution argument to record.',
-                    action='store_true')
-
-args = parser.parse_args()
-
+args = parse_args()
 
 # Parse user inputs
 model_path = args.model
@@ -63,26 +49,20 @@ img_count = 0
 while True:
 
     t_start = time.perf_counter()
-    
-    if camera.source_type == 'usb' or camera.source_type == 'webcam': # If source is a USB camera, grab frame from camera
-        ret, frame = camera.get_cap()
-        if (frame is None) or (not ret):
-            print('Unable to read frames from the camera. This indicates the camera is disconnected or not working. Exiting program.')
-            break
 
-    elif camera.source_type == 'picamera': # If source is a Picamera, grab frames using picamera interface
-        frame_bgra = camera.get_cap()
-        frame = cv2.cvtColor(np.copy(frame_bgra), cv2.COLOR_BGRA2BGR)
-        if (frame is None):
-            print('Unable to read frames from the Picamera. This indicates the camera is disconnected or not working. Exiting program.')
-            break
+    try:
+        frame = camera.get_frame()
+    except Exception as e:
+        print(f'Error getting frame from source: {e}')
+        break    
 
     # Resize frame to desired display resolution
     if camera.resize == True:
         frame = cv2.resize(frame,(camera.resW, camera.resH))
 
     # Run inference on frame
-    results = model(frame, verbose=False)
+    # results = model(frame, verbose=False)
+    results = model.track(frame, persist=True, tracker='bytetrack.yaml')
 
     cv2.circle(frame, (cam_centre_x, cam_centre_y), 3, (0, 0, 255), -1)
 
@@ -132,17 +112,17 @@ while True:
 
     # If inferencing on individual images, wait for user keypress before moving to next image. Otherwise, wait 5ms before moving to next frame.
     key = cv2.waitKey(5)
+
+    # Calculate FPS for this frame
+    t_stop = time.perf_counter()
+    frame_rate_calc = float(1/(t_stop - t_start))
     
     if key == ord('q') or key == ord('Q'): # Press 'q' to quit
         break
     elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
         cv2.waitKey()
     elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
-        cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)
-    
-    # Calculate FPS for this frame
-    t_stop = time.perf_counter()
-    frame_rate_calc = float(1/(t_stop - t_start))
+        cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)    
 
     # Append FPS result to frame_rate_buffer (for finding average FPS over multiple frames)
     if len(frame_rate_buffer) >= fps_avg_len:
