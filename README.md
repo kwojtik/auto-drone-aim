@@ -1,5 +1,5 @@
 # auto-drone-aim
-## How to run detection
+## How to run detection on windows
 1. If the env directory is not created
     ```bash
     python -m venv .venv
@@ -19,3 +19,7 @@
 4. Run script (example)
     ```bash
     python main.py --model ..\..\models\TestModel\my_model.pt --source webcam0 --resolution 1280x720
+
+## How to run detection on Manjaro ARM
+1. Make sure you have at least python 3.11 installed. If not:
+    a. Download and setup pyenv

@@ -44,11 +44,15 @@ avg_frame_rate = 0
 frame_rate_buffer = []
 fps_avg_len = 200
 img_count = 0
+# average_confidence_buffer = []
+# not_seen_count = 0
+# all_frames = 0
 
 # Begin inference loop
 while True:
-
+    # seen_balloon = False
     t_start = time.perf_counter()
+    # all_frames += 1
 
     try:
         frame = camera.get_frame()
@@ -76,6 +80,10 @@ while True:
     for i in range(len(detections)):
         # Get bounding box confidence
         conf = detections[i].conf.item()
+        average_confidence_buffer.append(conf)
+        seen_balloon = True
+        if len(average_confidence_buffer) > fps_avg_len:
+            average_confidence_buffer.pop(0)
 
         # Draw box if confidence threshold is high enough
         if conf > 0.8:
@@ -106,15 +114,16 @@ while True:
             cv2.putText(frame, f'Distance from centre:{distance_from_centre}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2)
             
     # cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
-    
+    # if not seen_balloon:
+    #     not_seen_count += 1
     cv2.imshow('YOLO detection results',frame) # Display image
     if record: camera.recorder.write(frame)
+    t_stop = time.perf_counter()
 
     # If inferencing on individual images, wait for user keypress before moving to next image. Otherwise, wait 5ms before moving to next frame.
     key = cv2.waitKey(5)
 
     # Calculate FPS for this frame
-    t_stop = time.perf_counter()
     frame_rate_calc = float(1/(t_stop - t_start))
     
     if key == ord('q') or key == ord('Q'): # Press 'q' to quit
@@ -133,10 +142,14 @@ while True:
 
     # Calculate average FPS for past frames
     avg_frame_rate = np.mean(frame_rate_buffer)
+    # Calculate average confidence for past frames    avg_confidence = np.mean(average_confidence_buffer)
+    avg_confidence = np.mean(average_confidence_buffer)
 
 
 # Clean up
 print(f'Average pipeline FPS: {avg_frame_rate:.2f}')
+# print(f'Average confidence: {avg_confidence:.2f}')
+# print(f'Average missed balloon frames: {not_seen_count/all_frames:.2%}')
 if camera.source_type == 'webcam' or camera.source_type == 'usb':
     camera.cap.release()
 elif camera.source_type == 'picamera':
