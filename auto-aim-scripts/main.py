@@ -11,6 +11,7 @@ from ultralytics import YOLO
 
 from Camera.Camera import Camera
 from Common.functions import parse_args
+from Control.Control import Control
 
 
 args = parse_args()
@@ -47,6 +48,8 @@ img_count = 0
 # average_confidence_buffer = []
 # not_seen_count = 0
 # all_frames = 0
+
+droneControl = Control()
 
 # Begin inference loop
 while True:
@@ -111,6 +114,11 @@ while True:
             cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1) # Draw label text
 
             distance_from_centre = math.dist((cx, cy), (cam_centre_x, cam_centre_y))
+            distanceX = cam_centre_x - cx
+            distanceY = cam_centre_y - cy
+            distanceZ = 1 - ((xmax - xmin) * (ymax - ymin)) / (camera.resW * camera.resH) # Simple distance estimation based on size of bounding box (smaller box = further away)
+            droneControl.run(distanceX, distanceY, distanceZ)
+            
             cv2.putText(frame, f'Distance from centre:{distance_from_centre}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2)
             
     # cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
