@@ -83,10 +83,7 @@ while True:
     for i in range(len(detections)):
         # Get bounding box confidence
         conf = detections[i].conf.item()
-        average_confidence_buffer.append(conf)
         seen_balloon = True
-        if len(average_confidence_buffer) > fps_avg_len:
-            average_confidence_buffer.pop(0)
 
         # Draw box if confidence threshold is high enough
         if conf > 0.8:
@@ -150,9 +147,6 @@ while True:
 
     # Calculate average FPS for past frames
     avg_frame_rate = np.mean(frame_rate_buffer)
-    # Calculate average confidence for past frames    avg_confidence = np.mean(average_confidence_buffer)
-    avg_confidence = np.mean(average_confidence_buffer)
-
 
 # Clean up
 print(f'Average pipeline FPS: {avg_frame_rate:.2f}')

@@ -1,6 +1,6 @@
 import serial
 import struct
-import msp_helper as msp
+import Control.msp_helper as msp
 
 
 class Control:
