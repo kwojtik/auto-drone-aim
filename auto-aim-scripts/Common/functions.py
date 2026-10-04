@@ -15,5 +15,7 @@ def parse_args():
                         default=None)
     parser.add_argument('--record', help='Record results from video or webcam and save it as "demo1.avi". Must specify --resolution argument to record.',
                         action='store_true')
+    parser.add_argument('--headless', help='Skip the live preview window (required when running without a display, e.g. as a systemd service).',
+                        action='store_true')
 
     return parser.parse_args()

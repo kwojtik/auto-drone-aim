@@ -4,29 +4,32 @@ import Control.msp_helper as msp
 
 
 class Control:
-    def __init__(self, companion_computer="COM3", baud_rate=115200):
+    def __init__(self, companion_computer="/dev/ttyACM0", baud_rate=115200):
         self.default_roll = 1500
         self.default_pitch = 1500
         self.default_yaw = 1500
         self.default_throttle = 1000
-        self.default_servo_aux2 = 1000
+        self.serial_port = None
 
         try:
             self.serial_port = serial.Serial(companion_computer, baud_rate, timeout=1)
         except serial.SerialException as e:
             print(f"Error connecting to serial port: {e}")
+            return
+
+        print(f"FC Variant: {self.get_FC_variant()}")
 
     def disconnect(self):
-        self.serial_port.close()
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.close()
 
     def run(self, distanceX, distanceY, distanceZ):
         roll = self.default_roll + int(distanceY * 0.5)
         pitch = int(self.default_pitch * distanceZ)
         yaw = self.default_yaw + int(distanceX * 0.5)
         throttle = self.default_throttle
-        servo_aux2 = self.default_servo_aux2
 
-        data = [roll, pitch, yaw, 0, throttle, servo_aux2, 0, 0]
+        data = [roll, pitch, yaw, 0, throttle, 0, 0, 0]
         print(data)
         self.send_control_signal(msp.MSP_SET_RAW_RC, data)
 
@@ -49,4 +52,10 @@ class Control:
         checksum = self.get_checksum(msp_command_id, payload)
         
         msp_package = header + bytes([length, msp_command_id]) + payload + bytes([checksum])
-        self.serial_port.write(msp_package)
+        if self.serial_port and self.serial_port.is_open:
+            self.serial_port.write(msp_package)
+
+    def get_FC_variant(self):
+        self.send_control_signal(msp.MSP_BOARD_INFO, [])
+        response = self.serial_port.read(20).decode('utf-8', errors='ignore')
+        return response

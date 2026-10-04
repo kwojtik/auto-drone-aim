@@ -22,6 +22,7 @@ img_source = args.source
 min_thresh = args.thresh
 user_res = args.resolution
 record = args.record
+headless = args.headless
 
 # Check if model file exists and is valid
 if (not os.path.exists(model_path)):
@@ -121,22 +122,24 @@ while True:
     # cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
     # if not seen_balloon:
     #     not_seen_count += 1
-    cv2.imshow('YOLO detection results',frame) # Display image
+    if not headless:
+        cv2.imshow('YOLO detection results',frame) # Display image
     if record: camera.recorder.write(frame)
     t_stop = time.perf_counter()
 
-    # If inferencing on individual images, wait for user keypress before moving to next image. Otherwise, wait 5ms before moving to next frame.
-    key = cv2.waitKey(5)
+    if not headless:
+        # If inferencing on individual images, wait for user keypress before moving to next image. Otherwise, wait 5ms before moving to next frame.
+        key = cv2.waitKey(5)
+
+        if key == ord('q') or key == ord('Q'): # Press 'q' to quit
+            break
+        elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
+            cv2.waitKey()
+        elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
+            cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)
 
     # Calculate FPS for this frame
     frame_rate_calc = float(1/(t_stop - t_start))
-    
-    if key == ord('q') or key == ord('Q'): # Press 'q' to quit
-        break
-    elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
-        cv2.waitKey()
-    elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
-        cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)    
 
     # Append FPS result to frame_rate_buffer (for finding average FPS over multiple frames)
     if len(frame_rate_buffer) >= fps_avg_len:
@@ -157,4 +160,5 @@ if camera.source_type == 'webcam' or camera.source_type == 'usb':
 elif camera.source_type == 'picamera':
     camera.cap.stop()
 if record: camera.recorder.release()
-cv2.destroyAllWindows()
+if not headless:
+    cv2.destroyAllWindows()

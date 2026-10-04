@@ -20,6 +20,5 @@
     ```bash
     python main.py --model ..\..\models\TestModel\my_model.pt --source webcam0 --resolution 1280x720
 
-## How to run detection on Manjaro ARM
-1. Make sure you have at least python 3.11 installed. If not:
-    a. Download and setup pyenv
+## Detection on RaspberryPi
+To make inference faster on RaspberryPi it is recommended to use lower resolution.
