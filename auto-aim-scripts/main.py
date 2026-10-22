@@ -1,8 +1,9 @@
+import logging
+import math
 import os
 import sys
-# import argparse
 import time
-import math
+from collections import deque
 
 import cv2
 import numpy as np
@@ -10,155 +11,176 @@ from ultralytics import YOLO
 # from yolox.tracker.byte_tracker import BYTETracker
 
 from Camera.Camera import Camera
-from Common.functions import parse_args
+from Common.functions import parse_args, setup_logging
 from Control.Control import Control
 
 
-args = parse_args()
+log = logging.getLogger('main')
 
-# Parse user inputs
-model_path = args.model
-img_source = args.source
-min_thresh = args.thresh
-user_res = args.resolution
-record = args.record
-headless = args.headless
+# Bounding box colors (Tableau 10 color scheme)
+BBOX_COLORS = [(164, 120, 87), (68, 148, 228), (93, 97, 209), (178, 182, 133), (88, 159, 106),
+               (96, 202, 231), (159, 124, 168), (169, 162, 241), (98, 118, 150), (172, 176, 184)]
+RED = (0, 0, 255)
+YELLOW = (0, 255, 255)
+BLACK = (0, 0, 0)
+FONT = cv2.FONT_HERSHEY_SIMPLEX
 
-# Check if model file exists and is valid
-if (not os.path.exists(model_path)):
-    print('ERROR: Model path is invalid or model was not found. Make sure the model filename was entered correctly.')
-    sys.exit(0)
+FPS_AVG_LEN = 200     # number of frames the average FPS is computed over
+STATUS_PERIOD = 5.0   # seconds between status lines in the log
 
-# Load the model into memory and get labemap
-model = YOLO(model_path, task='detect')
-labels = model.names
 
-camera = Camera(img_source, user_res, record)
-cam_centre_x = camera.resW // 2
-cam_centre_y = camera.resH // 2
+def draw_detection(frame, xmin, ymin, xmax, ymax, classname, classidx, conf):
+    color = BBOX_COLORS[classidx % len(BBOX_COLORS)]
+    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
 
-# Set bounding box colors (using the Tableu 10 color scheme)
-bbox_colors = [(164,120,87), (68,148,228), (93,97,209), (178,182,133), (88,159,106), 
-              (96,202,231), (159,124,168), (169,162,241), (98,118,150), (172,176,184)]
+    label = f'{classname}: {int(conf * 100)}%'
+    (label_w, label_h), baseline = cv2.getTextSize(label, FONT, 0.5, 1)
+    label_ymin = max(ymin, label_h + 10)  # Don't draw the label too close to the top of the window
+    cv2.rectangle(frame, (xmin, label_ymin - label_h - 10), (xmin + label_w, label_ymin + baseline - 10),
+                  color, cv2.FILLED)
+    cv2.putText(frame, label, (xmin, label_ymin - 7), FONT, 0.5, BLACK, 1)
 
-# Initialize control and status variables
-avg_frame_rate = 0
-frame_rate_buffer = []
-fps_avg_len = 200
-img_count = 0
-# average_confidence_buffer = []
-# not_seen_count = 0
-# all_frames = 0
 
-droneControl = Control()
+def process_detections(frame, detections, labels, min_thresh):
+    """Draw all detections above the threshold and return the largest one
+    (the closest object) as (xmin, ymin, xmax, ymax, area), or None."""
+    target = None
+    for detection in detections:
+        conf = detection.conf.item()
+        if conf < min_thresh:
+            continue
 
-# Begin inference loop
-while True:
-    # seen_balloon = False
-    t_start = time.perf_counter()
-    # all_frames += 1
+        # Ultralytics returns tensors - move to CPU and convert to ints
+        xmin, ymin, xmax, ymax = detection.xyxy.cpu().numpy().squeeze().astype(int)
+        classidx = int(detection.cls.item())
+        draw_detection(frame, xmin, ymin, xmax, ymax, labels[classidx], classidx, conf)
 
-    try:
-        frame = camera.get_frame()
-    except Exception as e:
-        print(f'Error getting frame from source: {e}')
-        break    
+        box_area = (xmax - xmin) * (ymax - ymin)
+        if target is None or box_area > target[4]:
+            target = (xmin, ymin, xmax, ymax, box_area)
+    return target
 
-    # Resize frame to desired display resolution
-    if camera.resize == True:
-        frame = cv2.resize(frame,(camera.resW, camera.resH))
 
-    # Run inference on frame
-    results = model(frame, verbose=False)
-    # results = model.track(frame, persist=True, tracker='bytetrack.yaml')
+def release_resources(camera, drone_control, record, headless):
+    if drone_control is not None:
+        drone_control.disconnect()
+    if camera.source_type in ('webcam', 'usb'):
+        camera.cap.release()
+    elif camera.source_type == 'picamera':
+        camera.cap.stop()
+    if record:
+        camera.recorder.release()
+    if not headless:
+        cv2.destroyAllWindows()
 
-    cv2.circle(frame, (cam_centre_x, cam_centre_y), 3, (0, 0, 255), -1)
 
-    # Extract results
-    detections = results[0].boxes
+def main():
+    args = parse_args()
+    setup_logging(args.loglevel)
 
-    # Initialize variable for basic object counting example
-    object_count = 0
+    if not os.path.exists(args.model):
+        log.error('Model path is invalid or model was not found. Make sure the model filename was entered correctly.')
+        sys.exit(0)
 
-    # Go through each detection and get bbox coords, confidence, and class
-    for i in range(len(detections)):
-        # Get bounding box confidence
-        conf = detections[i].conf.item()
-        seen_balloon = True
+    log.info(f'Loading model {args.model}')
+    model = YOLO(args.model, task='detect')
+    labels = model.names
 
-        # Draw box if confidence threshold is high enough
-        if conf > 0.8:
-            # Get bounding box coordinates
-            # Ultralytics returns results in Tensor format, which have to be converted to a regular Python array
-            xyxy_tensor = detections[i].xyxy.cpu() # Detections in Tensor format in CPU memory
-            xyxy = xyxy_tensor.numpy().squeeze() # Convert tensors to Numpy array
-            xmin, ymin, xmax, ymax = xyxy.astype(int) # Extract individual coordinates and convert to int
+    camera = Camera(args.source, args.resolution, args.record)
+    log.info(f'Camera source {args.source} ({camera.source_type}), resolution {camera.resW}x{camera.resH}')
+    cam_centre = (camera.resW // 2, camera.resH // 2)
+    cam_centre_x, cam_centre_y = cam_centre
 
-            # Get bounding box class ID and name
-            classidx = int(detections[i].cls.item())
-            classname = labels[classidx]
+    drone_control = None
+    if not args.nocontrols:
+        drone_control = Control()
+        # MSP OVERRIDE must only be enabled once the FC is already receiving
+        # MSP_SET_RAW_RC at a steady rate with valid values on all channels.
+        log.info('Waiting for MSP_SET_RAW_RC stream... (do NOT enable MSP OVERRIDE yet)')
+        if not drone_control.wait_until_streaming(timeout=5.0):
+            log.error('Could not start a steady MSP_SET_RAW_RC stream (no FC connection or no valid RC data). Exiting.')
+            drone_control.disconnect()
+            sys.exit(1)
+        log.info('RC stream active - MSP OVERRIDE can now be enabled.')
 
-            color = bbox_colors[classidx % 10]
-            cv2.rectangle(frame, (xmin,ymin), (xmax,ymax), color, 2)
+    avg_frame_rate = 0
+    frame_rate_buffer = deque(maxlen=FPS_AVG_LEN)
+    last_status_time = time.monotonic()
+    frames_with_target = 0
+    frame_count = 0
 
+    while True:
+        t_start = time.perf_counter()
+
+        try:
+            frame = camera.get_frame()
+        except Exception as e:
+            log.exception(f'Error getting frame from source: {e}')
+            break
+
+        if camera.resize:
+            frame = cv2.resize(frame, (camera.resW, camera.resH))
+
+        results = model(frame, verbose=False)
+        # results = model.track(frame, persist=True, tracker='bytetrack.yaml')
+
+        cv2.circle(frame, cam_centre, 3, RED, -1)
+
+        # Only one target drives the controls - the largest box (closest object)
+        target = process_detections(frame, results[0].boxes, labels, args.thresh)
+
+        if target is not None:
+            xmin, ymin, xmax, ymax, box_area = target
             cx = (xmin + xmax) // 2
             cy = (ymin + ymax) // 2
-            cv2.circle(frame, (cx, cy), 3, (0, 0, 255), -1)
+            cv2.circle(frame, (cx, cy), 3, RED, -1)
 
-            label = f'{classname}: {int(conf*100)}%'
-            labelSize, baseLine = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1) # Get font size
-            label_ymin = max(ymin, labelSize[1] + 10) # Make sure not to draw label too close to top of window
-            cv2.rectangle(frame, (xmin, label_ymin-labelSize[1]-10), (xmin+labelSize[0], label_ymin+baseLine-10), color, cv2.FILLED) # Draw white box to put label text in
-            cv2.putText(frame, label, (xmin, label_ymin-7), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1) # Draw label text
+            # Normalised errors: x is positive when the target is right of centre,
+            # y is positive when it is above centre (image y grows downwards)
+            error_x = (cx - cam_centre_x) / cam_centre_x
+            error_y = (cam_centre_y - cy) / cam_centre_y
+            area = box_area / (camera.resW * camera.resH)  # Simple distance estimate (smaller box = further away)
+            if drone_control is not None:
+                drone_control.run(error_x, error_y, area)
 
-            distance_from_centre = math.dist((cx, cy), (cam_centre_x, cam_centre_y))
-            distanceX = cam_centre_x - cx
-            distanceY = cam_centre_y - cy
-            distanceZ = 1 - ((xmax - xmin) * (ymax - ymin)) / (camera.resW * camera.resH) # Simple distance estimation based on size of bounding box (smaller box = further away)
-            droneControl.run(distanceX, distanceY, distanceZ)
-            
-            cv2.putText(frame, f'Distance from centre:{distance_from_centre}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2)
-            
-    # cv2.putText(frame, f'FPS: {avg_frame_rate:0.2f}', (10,20), cv2.FONT_HERSHEY_SIMPLEX, .7, (0,255,255), 2) # Draw framerate
-    # if not seen_balloon:
-    #     not_seen_count += 1
-    if not headless:
-        cv2.imshow('YOLO detection results',frame) # Display image
-    if record: camera.recorder.write(frame)
-    t_stop = time.perf_counter()
+            distance_from_centre = math.dist((cx, cy), cam_centre)
+            cv2.putText(frame, f'Distance from centre:{distance_from_centre:.0f}', (10, 20), FONT, .7, YELLOW, 2)
 
-    if not headless:
-        # If inferencing on individual images, wait for user keypress before moving to next image. Otherwise, wait 5ms before moving to next frame.
-        key = cv2.waitKey(5)
+        if not args.headless:
+            cv2.imshow('YOLO detection results', frame)
+        if args.record:
+            camera.recorder.write(frame)
+        t_stop = time.perf_counter()
 
-        if key == ord('q') or key == ord('Q'): # Press 'q' to quit
-            break
-        elif key == ord('s') or key == ord('S'): # Press 's' to pause inference
-            cv2.waitKey()
-        elif key == ord('p') or key == ord('P'): # Press 'p' to save a picture of results on this frame
-            cv2.imwrite(f"../../images/frame_{int(time.time())}.png", frame)
+        if not args.headless:
+            key = cv2.waitKey(5)
+            if key in (ord('q'), ord('Q')):    # Quit
+                break
+            elif key in (ord('s'), ord('S')):  # Pause until any key is pressed
+                cv2.waitKey()
+            elif key in (ord('p'), ord('P')):  # Save a picture of this frame
+                cv2.imwrite(f'../../images/frame_{int(time.time())}.png', frame)
 
-    # Calculate FPS for this frame
-    frame_rate_calc = float(1/(t_stop - t_start))
+        frame_rate_buffer.append(1 / (t_stop - t_start))
+        avg_frame_rate = np.mean(frame_rate_buffer)
 
-    # Append FPS result to frame_rate_buffer (for finding average FPS over multiple frames)
-    if len(frame_rate_buffer) >= fps_avg_len:
-        temp = frame_rate_buffer.pop(0)
-        frame_rate_buffer.append(frame_rate_calc)
-    else:
-        frame_rate_buffer.append(frame_rate_calc)
+        # Periodic status line, so `systemctl status` shows the service is alive and tracking
+        frame_count += 1
+        if target is not None:
+            frames_with_target += 1
+        now = time.monotonic()
+        if now - last_status_time >= STATUS_PERIOD:
+            status = f'FPS {avg_frame_rate:.1f}, target in {frames_with_target}/{frame_count} frames'
+            if drone_control is not None:
+                status += f', {drone_control.status()}'
+            log.info(status)
+            last_status_time = now
+            frames_with_target = 0
+            frame_count = 0
 
-    # Calculate average FPS for past frames
-    avg_frame_rate = np.mean(frame_rate_buffer)
+    log.info(f'Average pipeline FPS: {avg_frame_rate:.2f}')
+    release_resources(camera, drone_control, args.record, args.headless)
 
-# Clean up
-print(f'Average pipeline FPS: {avg_frame_rate:.2f}')
-# print(f'Average confidence: {avg_confidence:.2f}')
-# print(f'Average missed balloon frames: {not_seen_count/all_frames:.2%}')
-if camera.source_type == 'webcam' or camera.source_type == 'usb':
-    camera.cap.release()
-elif camera.source_type == 'picamera':
-    camera.cap.stop()
-if record: camera.recorder.release()
-if not headless:
-    cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    main()

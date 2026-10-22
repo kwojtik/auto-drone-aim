@@ -2,7 +2,10 @@ import os
 import sys
 import cv2
 import glob
+import logging
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 
 class Camera:
@@ -20,7 +23,7 @@ class Camera:
             self.source_type = 'webcam'
             self.cam_idx = int(source_path[6:])
         else:
-            print(f'Input {source_path} is invalid. Please try again.')
+            log.error(f'Input {source_path} is invalid. Please try again.')
             sys.exit(0)
 
         if resolution:
@@ -29,10 +32,10 @@ class Camera:
 
         if record:
             if self.source_type not in ['video', 'usb', 'webcam']:
-                print('Recording only works for video and camera sources. Please try again.')
+                log.error('Recording only works for video and camera sources. Please try again.')
                 sys.exit(0)
             if not resolution:
-                print('Please specify resolution to record video at.')
+                log.error('Please specify resolution to record video at.')
                 sys.exit(0)
             
             # Set up recording
