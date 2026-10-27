@@ -49,6 +49,9 @@ def parse_args():
                         action='store_true')
     parser.add_argument('--nocontrols', help='Disable sending RC commands to the flight controller (for testing purposes).',
                         action='store_true')
+    parser.add_argument('--osd', help='Show the detection state ("DETECTED: TRUE/FALSE") on the OSD through the craft name. '
+                                      'Requires the "Craft name" OSD element to be enabled on the flight controller.',
+                        action='store_true')
     parser.add_argument('--loglevel', help='Logging level: DEBUG, INFO, WARNING or ERROR (logs go to stderr / the systemd journal).',
                         default='INFO')
 
