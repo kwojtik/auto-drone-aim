@@ -41,13 +41,6 @@ BOX_MSP_OVERRIDE = 50
 STATUS_POLL_FRAMES = 5
 # Consecutive MSP_RC readings without our throttle while the mode is on before it is logged
 ECHO_MISS_LOG_FRAMES = 25
-# Detection state is shown on the OSD through the craft name (OSD element "Craft name").
-# The FC keeps at most 16 characters, and analog OSD fonts only have uppercase letters.
-OSD_TEXT_PREFIX = 'DETECTED: '
-OSD_NAME_MAX_LENGTH = 16
-# The craft name is re-sent this often even without a change, in case a write was lost
-# or the FC rebooted (seconds)
-OSD_REFRESH_PERIOD = 1.0
 
 
 def clamp(value, low, high):
@@ -59,7 +52,7 @@ class Control:
                  send_rate_hz=50, target_timeout=0.3, max_target_timeout=1.0,
                  max_offset=200, max_throttle_offset=25, throttle_trim=50,
                  throttle_i_gain=50, max_throttle_integral=150,
-                 target_area=0.1, deadband=0.05, osd_detection=False):
+                 target_area=0.1, deadband=0.05):
         # Gains are stick deflection (us) for a full normalised error (1.0)
         self.yaw_gain = 200
         self.pitch_gain = 150
@@ -69,7 +62,6 @@ class Control:
         self.target_area = target_area          # box area / frame area to hold the target at
         self.deadband = deadband                # normalised error ignored around zero
         self.send_period = 1.0 / max(send_rate_hz, MIN_SEND_RATE_HZ)
-        self.osd_detection = osd_detection      # show the detection state in the OSD craft name
         # Seconds without target -> sticks centred. Grows up to `max_target_timeout`
         # when inference is slower, so commands do not drop out between detections.
         self.target_timeout = target_timeout
@@ -100,9 +92,6 @@ class Control:
         self._thread = None
         self._streaming = threading.Event()     # set once MSP_SET_RAW_RC is streamed steadily
         self._rc_valid = None                   # last MSP_RC validity, to log only changes
-        self._original_name = None              # craft name before the OSD text, restored on exit
-        self._osd_text = None                   # last text written to the craft name
-        self._osd_sent_time = 0.0
 
         try:
             self.serial_port = serial.Serial(companion_computer, baud_rate, timeout=0.002)
@@ -112,13 +101,6 @@ class Control:
 
         self._fc_variant = self.get_FC_variant()
         log.info(f"Connected to {companion_computer} @ {baud_rate}, FC variant: {self._fc_variant}")
-
-        if self.osd_detection:
-            # A name starting with our prefix is left over from a run that did not exit cleanly
-            self._original_name = self.get_craft_name()
-            if self._original_name is not None and self._original_name.startswith(OSD_TEXT_PREFIX):
-                self._original_name = ''
-            log.info(f"Craft name: '{self._original_name}' - replaced by the detection state on the OSD")
 
         # Override is detected from the FC's mode flags. Only if the box cannot be found does
         # it fall back to recognising our throttle echoed back in MSP_RC.
@@ -171,15 +153,7 @@ class Control:
         if self._thread:
             self._thread.join()
         if self.serial_port and self.serial_port.is_open:
-            if self._original_name is not None:
-                self.set_craft_name(self._original_name)
             self.serial_port.close()
-
-    def is_target_detected(self):
-        """True while a target was seen within the target timeout - the same hold that keeps
-        the commands active, so the OSD does not flicker between single missed detections."""
-        with self._lock:
-            return time.monotonic() - self._last_target_time < self._current_target_timeout()
 
     def run(self, error_x, error_y, area):
         """error_x: target offset from the image centre, -1 (left edge) .. 1 (right edge)
@@ -315,8 +289,6 @@ class Control:
             loop_count += 1
             if self._override_box_index is not None and loop_count % STATUS_POLL_FRAMES == 0:
                 self._poll_override_mode(max(0.0, next_send - time.monotonic()))
-            if self.osd_detection:
-                self._update_osd()
 
             delay = next_send - time.monotonic()
             if delay > 0:
@@ -344,18 +316,6 @@ class Control:
             self._update_base_throttle(rc[MSP_RC_THROTTLE])
         return invalid_rc_frames
 
-    def _update_osd(self):
-        """Writes the detection state to the craft name when it changes, and periodically.
-        Runs in the send loop, so it never interleaves with the MSP_SET_RAW_RC frames."""
-        text = OSD_TEXT_PREFIX + ('TRUE' if self.is_target_detected() else 'FALSE')
-        now = time.monotonic()
-        if text != self._osd_text or now - self._osd_sent_time >= OSD_REFRESH_PERIOD:
-            if text != self._osd_text:
-                log.info(f"OSD: {text}")
-            self.set_craft_name(text)
-            self._osd_text = text
-            self._osd_sent_time = now
-
     def _poll_override_mode(self, timeout):
         """Reads the MSP OVERRIDE mode flag. A missed reply keeps the last known state."""
         active = self.get_mode_active(self._override_box_index, timeout=timeout)
@@ -371,9 +331,7 @@ class Control:
         return checksum
 
     def send_control_signal(self, msp_command_id, data):
-        self.send_raw(msp_command_id, struct.pack(f'<{len(data)}H', *data))
-
-    def send_raw(self, msp_command_id, payload):
+        payload = struct.pack(f'<{len(data)}H', *data)
         checksum = self.get_checksum(msp_command_id, payload)
         msp_package = MSP_REQUEST_HEADER + bytes([len(payload), msp_command_id]) + payload + bytes([checksum])
         if self.serial_port and self.serial_port.is_open:
@@ -448,19 +406,6 @@ class Control:
             extra = payload[16:16 + payload[15]]
             flags |= int.from_bytes(extra, 'little') << 32
         return bool(flags >> box_index & 1)
-
-    def get_craft_name(self, timeout=0.5):
-        """Craft name from the FC ('' if not set), None if there was no reply."""
-        self.serial_port.reset_input_buffer()
-        self.send_control_signal(msp.MSP_NAME, [])
-        payload = self.read_response(msp.MSP_NAME, timeout)
-        if payload is None:
-            return None
-        return payload.decode('ascii', errors='ignore').rstrip('\0')
-
-    def set_craft_name(self, name):
-        # Only changes the name in RAM - it is not saved unless MSP_EEPROM_WRITE is sent
-        self.send_raw(msp.MSP_SET_NAME, name.upper().encode('ascii', errors='ignore')[:OSD_NAME_MAX_LENGTH])
 
     def get_FC_variant(self):
         self.send_control_signal(msp.MSP_BOARD_INFO, [])

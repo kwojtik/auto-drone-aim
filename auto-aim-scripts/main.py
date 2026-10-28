@@ -93,7 +93,7 @@ def main():
 
     drone_control = None
     if not args.nocontrols:
-        drone_control = Control(osd_detection=args.osd)
+        drone_control = Control()
         # MSP OVERRIDE must only be enabled once the FC is already receiving
         # MSP_SET_RAW_RC at a steady rate with valid values on all channels.
         log.info('Waiting for MSP_SET_RAW_RC stream... (do NOT enable MSP OVERRIDE yet)')
